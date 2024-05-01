@@ -12,8 +12,7 @@
 #define SHMKEY2 2031536
 #define BUFF_SZ sizeof(int)
 #define PERMS 0644
-#define reqChance 5 //defines the chance that the process makes a request
-#define termChance 1 //defines the chance that a process terminates within a loop
+#define termChance 5 //defines the chance that a process terminates within a loop
 
 //Randomizer Section
 
@@ -42,9 +41,8 @@ static int randomize(void){
 //Set up struct for message queue
 typedef struct{
     long mtype;
-    int resource; //+ for request, - for giving
+    int memoryRequest; 
     pid_t pid;
-    int action;
 } msgbuffer;
 
 int main(int argc, char** argv){ //at some point, add bound parameter
@@ -55,7 +53,6 @@ int main(int argc, char** argv){ //at some point, add bound parameter
     buff.mtype = 1;
     int msqid;
     buff.pid = 0;
-    buff.action = 0;
     key_t key;
 
     if((key = ftok("oss.c", 1)) == -1){
@@ -91,112 +88,47 @@ int main(int argc, char** argv){ //at some point, add bound parameter
         fprintf(stderr, "Warning: No sources for randomness.\n");
     }
 
-    //Initialize bound
-    int bound = rand() % (atoi(argv[1]) + 1);
+    int exitFlag = 0;
     
-    //Initalize request time
-    int requestNano = sysClockNano + bound;
-    int requestSecond = sysClockS;
-    if(requestNano > pow(10, 9)){
-        requestNano -= (pow(10, 9));
-        requestSecond++;
-    }
-
-    //Set up array to track resources
-    int resourceArray[10];
-    for(int i = 0; i < 10; i++){
-        resourceArray[i] = 0;
-    }
-    //Set up control for work loop
-    int termFlag = 0;
-
-    int resourceCount = 0;
-
     //Work section
-    while(termFlag == 0){
+    while(!exitFlag){
+        
+        int pageNumber = rand() % 64;
+        int offset = rand() % 1024;
+        int memoryLocation = (pageNumber * 1024) + offset;
+        int readWrite = rand() % 100;
+        //Determine Read/Write Status
+        if(readWrite < 10){
+            memoryLocation = memoryLocation * -1;
+        }
+
+        buff.mtype = getppid();
+        buff.memoryRequest = memoryLocation;
+        buff.pid = getpid();
+        if(msgsnd(msqid, &buff, sizeof(buff) - sizeof(long), 0) == -1){
+            perror("Message Sent failure in child\n");
+            exit(1);
+        }
+        printf("Child Sent Message pid: %d\n", buff.pid);
+        printf("Child Sent Message Memory: %d\n", buff.memoryRequest);
+        printf("Child Sent Message mtype: %li\n", buff.mtype);
+
         //check if time to request
-        if(*sharedSeconds > requestSecond || (requestSecond == *sharedSeconds) && (*sharedNano > requestNano)){
-            //Determine whether to request or release 
-            int requestGenerate = rand() % 201;
-            buff.pid = getpid();
-            if(resourceCount == 0 || requestGenerate > reqChance){ //if requestGenerate is higher than reqchance, request
-                buff.resource = rand() % 10;
-                buff.action = 1;
-                buff.mtype = getppid();
-                while(resourceArray[buff.resource] > 20){
-                    buff.mtype = getppid();
-                    buff.resource = rand() % 10;
-                    buff.action = 1; 
-                }
-                printf("Child process: %d requesting for Resource %d\n",getpid(), buff.resource);
-            }
-            else{ //Release section
-                buff.resource = (rand() % 10);
-                buff.action = -1;
-                buff.mtype = getppid();
-                while(resourceArray[buff.resource] == 0){ //Checks to make sure child doesn't request more processes then what exits
-                    buff.mtype = getppid();
-                    buff.resource = (rand() % 10);
-                    buff.action = -1;
-                }
-                printf("Child releasing resource %d\n", buff.resource);
-            }
-            //Send request/release
-            if(msgsnd(msqid, &buff, sizeof(buff) - sizeof(long), 0) == -1){
-                perror("msgsnd to parent failed\n");
-                exit(1);
-            }
-            
-            //If sent request message, blocking recieved until child receives resource
-            if(buff.action > 0){
-                if(msgrcv(msqid, &buff, sizeof(buff) - sizeof(long), getpid(), 0) == -1){
-                    perror("msgrcv to parent failed");
-                    exit(1);
-                }
-                if(buff.action == -100){
-                    printf("Child process %d is terminating early from deadlock detection algorithm\n", getpid());
-                    break;
-                }
-                else{
-                    //Increment resource in resource array to track
-                    resourceArray[buff.resource]++;
-                    resourceCount++;
-                    //Reset bounds 
-                    bound = rand() % (atoi(argv[1]) + 1);
-                    requestNano = sysClockNano + bound;
-                    requestSecond = requestSecond;
-                    if(requestNano > pow(10, 9)){
-                        requestNano -= (pow(10, 9));
-                        requestSecond++;
-                    }
-                }
-            }
-            else{
-                //Decrement to indicate releasing resource
-                resourceArray[buff.resource]--;
-                resourceCount--;
-            }
+        if(msgrcv(msqid, &buff, sizeof(buff)- sizeof(long), getpid(), 0) == -1){
+            perror("Message Received failure in child\n");
+            exit(1);
         }
-
-        //Determinte if process should terminate
-        int terminateGenerate = rand() % 201;
-        if(terminateGenerate < termChance){
-
-            printf("Process %d is terminating\n", getpid());
-            termFlag = 1;
-            buff.action = -100;
-            buff.resource = -100;
-            buff.pid = getpid();
-            buff.mtype = getppid();
-            if(msgsnd(msqid, &buff, sizeof(buff) - sizeof(long), 0) == -1){
-                perror("msgsnd to parent failed\n");
-                exit(1);
-            }
+        else{
+            printf("Child Received Message pid: %d\n", buff.pid);
+            printf("Child Received Message Memory: %d\n", buff.memoryRequest);
+            printf("Child Received Message mtype: %li\n", buff.mtype);
+        }
+        int terminate = rand() % 100;
+        if(terminate < termChance){
+            exitFlag = 1;
         }
     }
-    if(msgctl(msqid, IPC_RMID, NULL) == -1){
-        perror("msgctl");
-        exit(1);
-    }
+    
+    printf("Child terminated\n");
     EXIT_SUCCESS;
 }

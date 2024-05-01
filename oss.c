@@ -32,10 +32,12 @@
 //Globals
 
 struct page{
+    pid_t pid;
     int pageNumber;
 };
 
 struct frame{
+    int occupied;
     int frameNumber;
     int secondChance;
     int dirtyBit;
@@ -53,9 +55,8 @@ struct PCB{
 //Message struct
 typedef struct {
     long mtype;
-    int resource;
+    int memoryRequest;
     pid_t pid;
-    int action;
 } msgbuffer;
 
 //Optarg struct
@@ -89,10 +90,7 @@ struct Queue{
 
 //Function prototypes
 int terminateCheck();
-int setUpResources();
-int deadlock(const int *available, const int m, const int n, const int *request, const int *allocated);
 int req_lt_avail(const int *req, const int *avail, const int pnum, const int num_res);
-void printResourceTable(int allocatedTable[20][10]);
 int addProcessTable(struct PCB processTable[20], pid_t pid);
 struct QNode* newNode(int k);
 struct Queue* createQueue();
@@ -108,8 +106,8 @@ void incrementClock(int *seconds, int *nano, int increment);
 static int randomize_helper(FILE *in);
 static int randomize(void);
 void clearResources();
-void resourceControl(int verbose, FILE *fptr, int allocatedTable[20][10], int *availableResources, pid_t pid, int resource, msgbuffer buff, int msqid);
 int clearProcessTable(struct PCB processTable[20], pid_t pid);
+int fillPageTable();
 
 int main(int argc, char* argv[]){
 
@@ -153,11 +151,11 @@ int main(int argc, char* argv[]){
         frameTable[i].secondChance = 0;
     }
 
-    //Set up user parameters
+    //Set up user parameters defaults
     options_t options;
-    options.proc = 5; //n
-    options.simul = 5; //s
-    options.interval = 1; //i
+    options.proc = 2; //n
+    options.simul = 2; //s
+    options.interval = 0; //i
     strcpy(options.logfile, "msgq.txt"); //f
 
     //Set up user input
@@ -196,10 +194,9 @@ int main(int argc, char* argv[]){
     //Variables for message queue
     key_t key;
     msgbuffer buff;
-    buff.mtype = 1;
-    buff.resource = 0;
+    buff.mtype = 0;
     buff.pid = 0;
-    buff.action = 0;
+    buff.memoryRequest = 0;
 
     //Set up timers
     if(setupinterrupt() == -1){
@@ -235,7 +232,6 @@ int main(int argc, char* argv[]){
         exit(1);
     }
     
-    
     //Variables
     int simulCount = 0;
     int childrenFinishedCount = 0;
@@ -251,24 +247,26 @@ int main(int argc, char* argv[]){
     int grantedCount = 0;
 
     //Stats
-    int grantedImmediately = 0;
-    int grantedWait = 0;
-    int deadlockCount = 0;
-    int naturalTermination = 0;
-    int deadlockTerminated = 0;
-
+    //Section Work
     while(childrenFinishedCount < options.proc){
 
-        if(terminateCheck < 0){
+        int terminatedChild = 0;
+        if(simulCount > 0 && (terminatedChild = terminateCheck()) < 0){
             perror("Wait for PID failed\n");
+        }
+        else if(terminatedChild > 0){
+            simulCount--;
+            childrenFinishedCount++;
         }
 
         pid_t child = 0;
-                //launch child
+        //launch child
+        
         if(childLaunchedCount < options.proc && 
             simulCount < options.simul &&
             simulCount < 18 &&
-            (*sharedSeconds > nextIntervalSecond || *sharedSeconds == nextIntervalNano && *sharedNano > nextIntervalSecond) &&
+            (*sharedSeconds > nextIntervalSecond || *sharedSeconds == nextIntervalNano && 
+            *sharedNano > nextIntervalSecond) &&
             (child = fork()) == 0){
                         
             //Child Launch Section
@@ -291,7 +289,51 @@ int main(int argc, char* argv[]){
             childLaunchedCount++;
             nextIntervalSecond += 1;
         }
-        //check messages and grant/release resource
+        //check messages and make memory request
+        if(simulCount > 0){
+            if(msgrcv(msqid, &buff, sizeof(buff) - sizeof(long), getpid(), IPC_NOWAIT)==-1){
+                if(errno == ENOMSG){
+
+                }
+                else{
+                    printf("MSQID: %li\n", buff.mtype);
+                    printf("Parent: %d Child: %d\n", getpid(), buff.pid);
+                    perror("Msgrcv in parent error\n");
+                    exit(1);
+                }
+            }
+            else{ //By design, if you're in this block, a message has been received
+                 
+
+
+
+                printf("Parent Received Message pid: %d\n", buff.pid);
+                printf("Parent Received Message Memory: %d\n", buff.memoryRequest);
+                printf("Parent Received Message mtype: %li\n", buff.mtype);
+                buff.mtype = buff.pid;
+                buff.pid = getpid();
+                buff.memoryRequest = 0;
+                if(msgsnd(msqid, &buff, sizeof(buff) - sizeof(long), 0) == -1){
+                    perror("Msgsnd failed\n");
+                    exit(1);
+                }
+                /*
+                else{
+                    printf("Parent Sent Message pid: %d\n", buff.pid);
+                    printf("Parent Sent Message Memory: %d\n", buff.memoryRequest);
+                    printf("Parent Sent Message mtype: %li\n", buff.mtype);
+                }
+                */
+            
+                //Make memory request
+                //Update page table
+                //Update frame table
+                //If page fault, run clock algo
+                //Send message back to child to unblock
+
+            }
+        }
+        incrementClock(sharedSeconds, sharedNano, 5000);
         
         
     }
@@ -311,14 +353,37 @@ int main(int argc, char* argv[]){
 
 }
 
+
+//Section function
+
+int fillPageTable(pid_t pid, int request, struct page pageTable){
+    int index = 0;
+    for(int i = 0; i < 20; i++){
+        if(processTable[i].pid == pid){
+            index = i;
+        }
+    }
+
+
+
+
+    return 0;
+}
+
+
+
 int terminateCheck(){
     int status = 0;
     pid_t terminatedChild = waitpid(0, &status, WNOHANG);
-    if(terminatedChild >= 0){
+    if(terminatedChild > 0){
+        clearProcessTable(processTable, terminatedChild);
         return terminatedChild;
     }
+    else if(terminatedChild == 0){
+        return 0; 
+    }
     else{
-        return -1;
+        return -1;    
     }
 
 
@@ -443,52 +508,6 @@ static int randomize(void){
     if(!randomize_helper(fopen("/dev/arandom", "r"))) return 0;
     if(!randomize_helper(fopen("/dev/random", "r"))) return 0;
     return -1;
-}
-
-void resourceControl(int verbose, FILE *fptr, int allocatedTable[20][10], int *availableResources, pid_t pid, int resource, msgbuffer buff, int msqid){
-    printf("Enter Resource Control\n");    
-    int index = 0;
-    for(int i = 0; i < 20; i++){
-        if(processTable[i].pid == pid){
-            index = i;
-        }
-    }
-    if(resource == -100){ //When process terminates and releases all resources
-        for(int i = 0; i < 10; i++){
-            availableResources[i] += allocatedTable[index][i];
-            allocatedTable[index][i] = 0;
-        }
-    }
-    else if(buff.action < 0){ //Release resource to process
-        printf("Process %d releases resource: %d\n", pid, resource);
-        fprintf(fptr, "Process %d releases resource: %d\n", pid, resource);
-        availableResources[resource]++;
-        allocatedTable[index][resource]--;
-    }
-    else if(buff.action > 0){ //grant resource to process
-        (availableResources[resource])--;
-        (allocatedTable[index][resource])++;
-        buff.mtype = pid;
-        buff.resource = resource;
-        buff.pid = getpid();
-        buff.action = 1;
-        if(verbose == 1){
-            printf("Grant resource %d for process %li\n", buff.resource, buff.mtype);
-            fprintf(fptr, "Grant resource %d for process %li\n", buff.resource, buff.mtype);
-        }
-        if(msgsnd(msqid, &buff, sizeof(buff) - sizeof(long), 0) == -1){
-            perror("Msgsend to child failed");
-            exit(1);
-        }
-        else{
-            printf("Sent message to process %li\n", buff.mtype);
-            fprintf(fptr, "Sent message to process %li\n", buff.mtype);
-        }
-    }
-    else{
-        perror("Resource error");
-        exit(1);
-    }
 }
 
 int clearProcessTable(struct PCB processTable[20], pid_t pid){
