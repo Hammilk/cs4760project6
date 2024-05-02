@@ -50,7 +50,8 @@ struct PCB{
     pid_t pid; //process id of child
     int startSeconds; //time when it was forked
     int startNano; //time when it was forked
-    int blocked;
+    int blockSeconds; //time until unblock
+    int blockNano; //time until unblock
     struct page pageTable[64];
 };
 
@@ -83,6 +84,7 @@ int msqid;
 
 struct QNode{
     int key;
+    int request;
     struct QNode* next;
 };
 
@@ -94,9 +96,9 @@ struct Queue{
 int terminateCheck();
 int req_lt_avail(const int *req, const int *avail, const int pnum, const int num_res);
 int addProcessTable(struct PCB processTable[20], pid_t pid);
-struct QNode* newNode(int k);
+struct QNode* newNode(int k, int r);
 struct Queue* createQueue();
-void enQueue(struct Queue* q, int k);
+void enQueue(struct Queue* q, int k, int r);
 void deQueue(struct Queue* q);
 int lfprintf(FILE *stream,const char *format, ... );
 static int setupinterrupt(void);
@@ -145,6 +147,8 @@ int main(int argc, char* argv[]){
         processTable[i].pid = 0;
         processTable[i].startSeconds = 0;
         processTable[i].startNano = 0;
+        processTable[i].blockSeconds = 0;
+        processTable[i].blockNano = 0;
         for(int i2 = 0; i2 < 64; i2++){
             processTable[i].pageTable[i2].occupied = 0;
             processTable[i].pageTable[i2].frameNumber = 0;
@@ -303,6 +307,43 @@ int main(int argc, char* argv[]){
             childLaunchedCount++;
             nextIntervalSecond += 1;
         }
+
+        //Check Queues
+        if(blockQueue->front != NULL &&
+            (((*sharedSeconds) > processTable[blockQueue->front->key].blockSeconds) ||
+            ((*sharedSeconds) == processTable[blockQueue->front->key].blockSeconds &&
+            (*sharedNano) > processTable[blockQueue->front->key].blockNano))
+        ){
+            int nextFrame = -1;
+            int queuedRequest = blockQueue->front->request;
+            int queuedProcessIndex = blockQueue->front->key;
+            pid_t queuedProcess = processTable[queuedProcessIndex].pid;
+            
+            //Check for open frames
+            for(int i = 0; i < 256; i++){
+                if(frameTable[i].occupied == 0){
+                    nextFrame = i;
+                    break;
+                }
+            }
+            //If no open frames, create a victim frame through clock
+            if(nextFrame < 0){
+                nextFrame = secondChance(frameTable);
+            }
+            //Fill tables
+            fillPageTable(queuedProcess, queuedRequest, nextFrame);
+            fillFrameTable(queuedProcess, queuedRequest, nextFrame, frameTable);
+            //Send message to release child process
+            if(msgsnd(msqid, &buff, sizeof(buff)-sizeof(long), 0) == -1){
+                perror("queued message send failed\n");
+                exit(1);
+            }
+            //Clear blocked info
+            deQueue(blockQueue);
+            processTable[queuedProcessIndex].blockSeconds = 0;
+            processTable[queuedProcessIndex].blockNano = 0;
+        }
+
         //check messages and make memory request
         if(simulCount > 0){
             if(msgrcv(msqid, &buff, sizeof(buff) - sizeof(long), getpid(), IPC_NOWAIT)==-1){
@@ -345,37 +386,22 @@ int main(int argc, char* argv[]){
                     }
                     else{
                         frameTable[frameReference].dirtyBit = 0;
-                    } 
+                    }
+                    buff.mtype = buff.pid;
+                    buff.pid = getpid();
+                    buff.memoryRequest = 0;
+                    if(msgsnd(msqid, &buff, sizeof(buff) - sizeof(long), 0) == -1){
+                        perror("Msgsnd failed\n");
+                        exit(1);
+                    }
                 }
                 else{
-                    //Find free frame
-                    int frameNumber = -1;
-                    for(int i = 0; i < 256; i++){
-                        if(frameTable[i].occupied == 0){
-                            frameNumber = i;
-                            break;
-                        }
-                    }
-                    //If there is a free frame then...
-                    if(frameNumber >= 0){
-                        fillPageTable(buff.pid, buff.memoryRequest, frameNumber);
-                        fillFrameTable(buff.pid, buff.memoryRequest, frameNumber, frameTable);
-                        incrementClock(sharedSeconds, sharedNano, 14 * pow(10, 6));
-
-                        printf("oss: Address %d in frame %d, giving data to P%d at time %d:%d\n", abs(buff.memoryRequest), frameNumber,
-                            buff.pid, *sharedSeconds, *sharedNano);
-
-                        buff.mtype = buff.pid;
-                        buff.pid = getpid();
-                        buff.memoryRequest = 0;
-                        if(msgsnd(msqid, &buff, sizeof(buff) - sizeof(long), 0) == -1){
-                            perror("Msgsnd failed\n");
-                            exit(1);
-                        }
-                    }
-                    //If there is no free frame
-                    else if(frameNumber < 0){
-                        frameNumber = secondChance(frameTable);
+                    enQueue(blockQueue, processNumber);
+                    processTable[processNumber].blockSeconds = *sharedSeconds;
+                    processTable[processNumber].blockNano = (*sharedNano) + 14 * pow(10, 6);
+                    if(processTable[processNumber].blockNano > pow(10, 9)){
+                        processTable[processNumber].blockNano -= pow(10, 9);
+                        processTable[processNumber].blockSeconds++;
                     }
                 }
                 
@@ -560,8 +586,8 @@ void printProcessTable(int PID, int SysClockS, int SysClockNano, struct PCB proc
     printf("Entry     Occupied  PID       StartS    Startn     Blocked\n"); 
     for(int i = 0; i<20; i++){
         if((processTable[i].occupied) == 1){
-            printf("%d         %d         %d         %d         %d         %d\n", i, processTable[i].occupied,
-                   processTable[i].pid, processTable[i].startSeconds, processTable[i].startNano, processTable[i].blocked);
+            printf("%d         %d         %d         %d         %d\n", i, processTable[i].occupied,
+                   processTable[i].pid, processTable[i].startSeconds, processTable[i].startNano);
         }
     } 
 }
@@ -572,8 +598,8 @@ void fprintProcessTable(int PID, int SysClockS, int SysClockNano, struct PCB pro
     lfprintf(fptr, "Entry     Occupied  PID       StartS    Startn      Blocked\n"); 
     for(int i = 0; i<20; i++){
         if((processTable[i].occupied) == 1){
-            lfprintf(fptr, "%d         %d         %d         %d         %d         %d\n", i, processTable[i].occupied, 
-                     processTable[i].pid, processTable[i].startSeconds, processTable[i].startNano, processTable[i].blocked);
+            lfprintf(fptr, "%d         %d         %d         %d\n", i, processTable[i].occupied, 
+                     processTable[i].pid, processTable[i].startSeconds, processTable[i].startNano);
         }
     } 
 }
@@ -627,7 +653,12 @@ int clearProcessTable(struct PCB processTable[20], pid_t pid){
             processTable[i].pid = 0;
             processTable[i].startSeconds = 0;
             processTable[i].startNano = 0;
-            processTable[i].blocked = 0;
+            processTable[i].blockSeconds = 0;
+            processTable[i].blockNano = 0;
+            for(int i2 = 0; i2 < 64; i2++){
+                processTable[i].pageTable[i2].occupied = 0;
+                processTable[i].pageTable[i2].frameNumber = 0;
+            }
             return 0; 
         }
     }
@@ -648,9 +679,10 @@ int addProcessTable(struct PCB processTable[20], pid_t pid){
 }
 
 //Create new node function
-struct QNode* newNode(int k){
+struct QNode* newNode(int k, int r){
     struct QNode* temp = (struct QNode*)malloc(sizeof(struct QNode));
     temp->key = k;
+    temp->request = r;
     temp->next = NULL;
     return temp;
 }
@@ -663,9 +695,8 @@ struct Queue* createQueue(){
 }
 
 //The function to add a key k to q
-void enQueue(struct Queue* q, int k){
-    struct QNode* temp = newNode(k);
-
+void enQueue(struct Queue* q, int k, int r){
+    struct QNode* temp = newNode(k, r);
     if(q->rear == NULL){
         q->front = q->rear = temp;
         return;
