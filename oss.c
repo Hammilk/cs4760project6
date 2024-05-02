@@ -276,6 +276,8 @@ int main(int argc, char* argv[]){
             perror("Wait for PID failed\n");
         }
         else if(terminatedChild > 0){
+            fprintf(fptr, "OSS: P%d has terminated at time %d:%d", terminatedChild, *sharedSeconds, *sharedNano);
+            printf("OSS: P%d has terminated at time %d:%d", terminatedChild, *sharedSeconds, *sharedNano);
             simulCount--;
             childrenFinishedCount++;
             clearProcessTable(processTable, terminatedChild);
@@ -314,7 +316,8 @@ int main(int argc, char* argv[]){
         }
 
         //Check Queues
-        if(blockQueue->front != NULL &&
+        //Changed if to while
+        while(blockQueue->front != NULL &&
             (((*sharedSeconds) > processTable[blockQueue->front->key].blockSeconds) ||
             ((*sharedSeconds) == processTable[blockQueue->front->key].blockSeconds &&
             (*sharedNano) > processTable[blockQueue->front->key].blockNano))
@@ -332,8 +335,8 @@ int main(int argc, char* argv[]){
                 for(int i = 0; i < 256; i++){
                     if(frameTable[i].occupied == 0){
                         nextFrame = i;
-                        //printf("oss: Address %d in frame %d, giving queued data to P%d at time %d:%d\n", 
-                         //  queuedRequest, nextFrame, queuedProcess, *sharedSeconds, *sharedNano);
+                        printf("oss: Address %d in page %d inserted in frame %d, giving queued data to P%d at time %d:%d\n", 
+                           queuedRequest, abs(queuedRequest)/1024, nextFrame, queuedProcess, *sharedSeconds, *sharedNano);
                         break;
                     }
                 }
@@ -342,9 +345,15 @@ int main(int argc, char* argv[]){
                     nextFrame = secondChance(frameTable);
                     printf("oss: Clearing frame %d and swapping in P%d page %d\n", nextFrame, queuedProcess, abs(queuedRequest/1024));
                 }
+
+
                 //Fill tables
                 fillPageTable(queuedProcess, queuedRequest, nextFrame);
                 fillFrameTable(queuedProcess, queuedRequest, nextFrame, frameTable);
+                if(queuedRequest < 0){
+                    printf("OSS: Dirty bit of frame %d set, adding additional time to clock\n", nextFrame);
+                    
+                }
                 //Send message to release child process
                 
                 buff.pid = getpid();
