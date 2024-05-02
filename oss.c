@@ -301,7 +301,7 @@ int main(int argc, char* argv[]){
                 perror("Add process table failed");
                 exit(1);
             }
-            printf("Process %d has launched at %d seconds and %d nano\n", child, *sharedSeconds, *sharedNano);
+            printf("OSS: Process %d has launched at %d seconds and %d nano\n", child, *sharedSeconds, *sharedNano);
             fprintf(fptr, "Process %d has launched at %d seconds and %d nano\n", child, *sharedSeconds, *sharedNano);
             simulCount++;
             childLaunchedCount++;
@@ -314,6 +314,7 @@ int main(int argc, char* argv[]){
             ((*sharedSeconds) == processTable[blockQueue->front->key].blockSeconds &&
             (*sharedNano) > processTable[blockQueue->front->key].blockNano))
         ){
+            printf("In queue work\n");
             int nextFrame = -1;
             int queuedRequest = blockQueue->front->request;
             int queuedProcessIndex = blockQueue->front->key;
@@ -323,12 +324,15 @@ int main(int argc, char* argv[]){
             for(int i = 0; i < 256; i++){
                 if(frameTable[i].occupied == 0){
                     nextFrame = i;
+                    printf("oss: Address %d in frame %d, giving data to P%d at time %d:%d\n", 
+                           queuedRequest, nextFrame, queuedRequest, *sharedSeconds, *sharedNano);
                     break;
                 }
             }
             //If no open frames, create a victim frame through clock
             if(nextFrame < 0){
                 nextFrame = secondChance(frameTable);
+                printf("oss: Clearing frame %d and swapping in P%d page %d\n", nextFrame, queuedProcess, queuedRequest/1024);
             }
             //Fill tables
             fillPageTable(queuedProcess, queuedRequest, nextFrame);
@@ -348,7 +352,7 @@ int main(int argc, char* argv[]){
         if(simulCount > 0){
             if(msgrcv(msqid, &buff, sizeof(buff) - sizeof(long), getpid(), IPC_NOWAIT)==-1){
                 if(errno == ENOMSG){
-
+                    incrementClock(sharedSeconds, sharedNano, 100);
                 }
                 else{
                     printf("MSQID: %li\n", buff.mtype);
@@ -404,6 +408,7 @@ int main(int argc, char* argv[]){
                         processTable[processNumber].blockSeconds++;
                     }
                 }
+                printf("test\n");
                 
                                 
 
@@ -416,10 +421,10 @@ int main(int argc, char* argv[]){
 
             }
         }
+        //printf("TestLoop %d\n", childrenFinishedCount);
         incrementClock(sharedSeconds, sharedNano, 5000);
-        
-        
     }
+    printf("Out of loop\n");
     //Remove message queues 
     if(msgctl(msqid, IPC_RMID, NULL) == -1){
         perror("msgctl to get rid of queue in parent failed");
@@ -451,6 +456,7 @@ int secondChance(struct frame frameTable[256]){
             nextFrame = i;
         }
         i = (i + 1) % 256;
+        printf("testSecond\n");
     }
     return i;
 }
