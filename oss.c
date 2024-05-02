@@ -42,6 +42,7 @@ struct frame{
     pid_t pid;
     int secondChance;
     int dirtyBit;
+    int nextFrame;
 };
  
 struct PCB{
@@ -110,6 +111,9 @@ void clearResources();
 int clearProcessTable(struct PCB processTable[20], pid_t pid);
 int fillPageTable(pid_t, int, int);
 void fillFrameTable(pid_t, int, int, struct frame frameTable[256]);
+int secondChance(struct frame FrameTable[256]);
+
+
 
 int main(int argc, char* argv[]){
 
@@ -154,6 +158,7 @@ int main(int argc, char* argv[]){
         frameTable[i].occupied = 0;
         frameTable[i].dirtyBit = 0;
         frameTable[i].secondChance = 0;
+        frameTable[i].nextFrame = 0;
     }
 
     //Set up user parameters defaults
@@ -250,6 +255,10 @@ int main(int argc, char* argv[]){
     int checkSecond = 0; 
     int checkProgressSecond = 0;
     int grantedCount = 0;
+    struct frame *nextFrame;
+    nextFrame = &frameTable[0];
+
+    struct Queue *blockQueue = createQueue();
 
     //Stats
     //Section Work
@@ -308,6 +317,7 @@ int main(int argc, char* argv[]){
                 }
             }
             else{ //By design, if you're in this block, a message has been received
+                int address = abs(buff.memoryRequest);                
                 printf("oss: P%d requesting ", buff.pid);
                 if(buff.memoryRequest > 0){
                     printf("read");
@@ -317,47 +327,59 @@ int main(int argc, char* argv[]){
                 }
                 printf(" of address %d at time %d:%d\n", abs(buff.memoryRequest), *sharedSeconds, *sharedNano);
 
+                //Creates a process number index for future use 
                 int processNumber = -1;
                 for(int i = 0; i < 20; i++){
                     if(processTable[i].pid == buff.pid){
                         processNumber = i;
                     }
                 }
-                
-                //Find free frame
-                int frameNumber = -1;
-                for(int i = 0; i < 256; i++){
-                    if(frameTable[i].occupied == 0){
-                        frameNumber = i;
-                        break;
+
+                //Checks for no page fault
+                if(processTable[processNumber].pageTable[address/1024].occupied == 1){
+                    int frameReference = processTable[processNumber].pageTable[address/1024].frameNumber;
+                    frameTable[frameReference].secondChance = 1;
+                    //I don't actually know if the following is needed
+                    if(buff.memoryRequest < 0){
+                        frameTable[frameReference].dirtyBit = 1;
+                    }
+                    else{
+                        frameTable[frameReference].dirtyBit = 0;
+                    } 
+                }
+                else{
+                    //Find free frame
+                    int frameNumber = -1;
+                    for(int i = 0; i < 256; i++){
+                        if(frameTable[i].occupied == 0){
+                            frameNumber = i;
+                            break;
+                        }
+                    }
+                    //If there is a free frame then...
+                    if(frameNumber >= 0){
+                        fillPageTable(buff.pid, buff.memoryRequest, frameNumber);
+                        fillFrameTable(buff.pid, buff.memoryRequest, frameNumber, frameTable);
+                        incrementClock(sharedSeconds, sharedNano, 14 * pow(10, 6));
+
+                        printf("oss: Address %d in frame %d, giving data to P%d at time %d:%d\n", abs(buff.memoryRequest), frameNumber,
+                            buff.pid, *sharedSeconds, *sharedNano);
+
+                        buff.mtype = buff.pid;
+                        buff.pid = getpid();
+                        buff.memoryRequest = 0;
+                        if(msgsnd(msqid, &buff, sizeof(buff) - sizeof(long), 0) == -1){
+                            perror("Msgsnd failed\n");
+                            exit(1);
+                        }
+                    }
+                    //If there is no free frame
+                    else if(frameNumber < 0){
+                        frameNumber = secondChance(frameTable);
                     }
                 }
-                if(frameNumber >= 0){
-                    fillPageTable(buff.pid, buff.memoryRequest, frameNumber);
-                    fillFrameTable(buff.pid, buff.memoryRequest, frameNumber, frameTable);
-                }
-
-                //If frame is free
-                /*
-                 * Fill page table
-                 * Fill frame table
-                 * Send message
-                 *
-                 * Page fault
-                 * Second Chance algo
-                 */ 
                 
-                printf("oss: Address %d in frame %d, giving data to P%d at time %d:%d\n", abs(buff.memoryRequest), frameNumber,
-                       buff.pid, *sharedSeconds, *sharedNano);
-
-                buff.mtype = buff.pid;
-                buff.pid = getpid();
-                buff.memoryRequest = 0;
-                if(msgsnd(msqid, &buff, sizeof(buff) - sizeof(long), 0) == -1){
-                    perror("Msgsnd failed\n");
-                    exit(1);
-                }
-
+                                
 
                             
                 //Make memory request
@@ -390,6 +412,24 @@ int main(int argc, char* argv[]){
 
 
 //Section function
+
+int secondChance(struct frame frameTable[256]){
+    int nextFrame = -1;
+    int i = 0;
+    while(nextFrame < 0){
+        if(frameTable[i].secondChance == 1){
+            frameTable[i].secondChance = 0;
+        }
+        else{
+            frameTable[i].nextFrame = 1;
+            nextFrame = i;
+        }
+        i = (i + 1) % 256;
+    }
+    return i;
+}
+
+
 
 int fillPageTable(pid_t pid, int request, int frame){
     int pageNumber = abs(request) / 1024;
