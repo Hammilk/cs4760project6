@@ -88,6 +88,7 @@ int main(int argc, char** argv){ //at some point, add bound parameter
     }
 
     int exitFlag = 0;
+    int requestCount = 0;
     
     //Work section
     while(!exitFlag){
@@ -125,12 +126,15 @@ int main(int argc, char** argv){ //at some point, add bound parameter
             printf("Child Received Message mtype: %li\n", buff.mtype);
         }
         */
-        int terminate = rand() % 100;
-        if(terminate < termChance){
-            exitFlag = 1;
+        requestCount++;
+        if(requestCount % 1000 == 0){
+            int terminate = rand() % 100;
+            if(terminate < termChance){
+                exitFlag = 1;
+            }
         }
+        
     }
     
-    printf("Child terminated\n");
     EXIT_SUCCESS;
 }

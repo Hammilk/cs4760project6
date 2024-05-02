@@ -93,6 +93,7 @@ struct Queue{
 };
 
 //Function prototypes
+void printFrameTable(int SysClockS, int SysClockNano, struct frame frameTable[256], int nextFrame);
 void clearFrame(struct frame frameTable[256], pid_t pid);
 int terminateCheck();
 int req_lt_avail(const int *req, const int *avail, const int pnum, const int num_res);
@@ -168,8 +169,8 @@ int main(int argc, char* argv[]){
 
     //Set up user parameters defaults
     options_t options;
-    options.proc = 2; //n
-    options.simul = 2; //s
+    options.proc = 80; //n
+    options.simul = 18; //s
     options.interval = 0; //i
     strcpy(options.logfile, "msgq.txt"); //f
 
@@ -262,6 +263,7 @@ int main(int argc, char* argv[]){
     int grantedCount = 0;
     struct frame *nextFrame;
     nextFrame = &frameTable[0];
+    int frameInterval = 0;
 
     struct Queue *blockQueue = createQueue();
 
@@ -304,7 +306,7 @@ int main(int argc, char* argv[]){
                 perror("Add process table failed");
                 exit(1);
             }
-            printf("OSS: Process %d has launched at %d seconds and %d nano\n", child, *sharedSeconds, *sharedNano);
+            //printf("OSS: Process %d has launched at %d seconds and %d nano\n", child, *sharedSeconds, *sharedNano);
             fprintf(fptr, "Process %d has launched at %d seconds and %d nano\n", child, *sharedSeconds, *sharedNano);
             simulCount++;
             childLaunchedCount++;
@@ -330,15 +332,15 @@ int main(int argc, char* argv[]){
                 for(int i = 0; i < 256; i++){
                     if(frameTable[i].occupied == 0){
                         nextFrame = i;
-                        printf("oss: Address %d in frame %d, giving queued data to P%d at time %d:%d\n", 
-                           queuedRequest, nextFrame, queuedProcess, *sharedSeconds, *sharedNano);
+                        //printf("oss: Address %d in frame %d, giving queued data to P%d at time %d:%d\n", 
+                         //  queuedRequest, nextFrame, queuedProcess, *sharedSeconds, *sharedNano);
                         break;
                     }
                 }
                 //If no open frames, create a victim frame through clock
                 if(nextFrame < 0){
                     nextFrame = secondChance(frameTable);
-                    printf("oss: Clearing frame %d and swapping in P%d page %d\n", nextFrame, queuedProcess, queuedRequest/1024);
+                    printf("oss: Clearing frame %d and swapping in P%d page %d\n", nextFrame, queuedProcess, abs(queuedRequest/1024));
                 }
                 //Fill tables
                 fillPageTable(queuedProcess, queuedRequest, nextFrame);
@@ -375,6 +377,7 @@ int main(int argc, char* argv[]){
             }
             else{ //By design, if you're in this block, a message has been received
                 int address = abs(buff.memoryRequest);                
+                /*
                 printf("oss: P%d requesting ", buff.pid);
                 if(buff.memoryRequest > 0){
                     printf("read");
@@ -383,6 +386,7 @@ int main(int argc, char* argv[]){
                     printf("write");
                 }
                 printf(" of address %d at time %d:%d\n", abs(buff.memoryRequest), *sharedSeconds, *sharedNano);
+                */
 
                 //Creates a process number index for future use 
                 int processNumber = -1;
@@ -400,8 +404,8 @@ int main(int argc, char* argv[]){
                     if(buff.memoryRequest < 0){
                         frameTable[frameReference].dirtyBit = 1;
                     }
-                    printf("oss: Address %d in frame %d, giving data to P%d at time %d:%d\n", 
-                           abs(buff.memoryRequest), frameReference, buff.pid, *sharedSeconds, *sharedNano);
+                    //printf("oss: Address %d in frame %d, giving data to P%d at time %d:%d\n", 
+                     //      abs(buff.memoryRequest), frameReference, buff.pid, *sharedSeconds, *sharedNano);
 
                     buff.mtype = buff.pid;
                     buff.pid = getpid();
@@ -431,8 +435,13 @@ int main(int argc, char* argv[]){
             }
         }
         //printf("TestLoop %d\n", childrenFinishedCount);
-        incrementClock(sharedSeconds, sharedNano, 5000);
+        if((*sharedSeconds) > frameInterval){
+            frameInterval++;
+            //printFrameTable(*sharedSeconds, *sharedNano, frameTable, 0);
+        }
+        incrementClock(sharedSeconds, sharedNano, 5000); 
     }
+
     printf("Out of loop\n");
     //Remove message queues 
     if(msgctl(msqid, IPC_RMID, NULL) == -1){
@@ -477,9 +486,9 @@ int secondChance(struct frame frameTable[256]){
         else{
             frameTable[i].nextFrame = 1;
             nextFrame = i;
+            break;
         }
         i = (i + 1) % 256;
-        printf("testSecond\n");
     }
     return i;
 }
@@ -502,7 +511,7 @@ void fillFrameTable(pid_t pid, int request, int frame, struct frame frameTable[2
     frameTable[frame].pid = pid;
     frameTable[frame].pageNumber = pageNumber;
     frameTable[frame].occupied = 1;
-    frameTable[frame].secondChance = 0;
+    frameTable[frame].secondChance = 1;
     if(request < 0){
         frameTable[frame].dirtyBit = 1;
     }
