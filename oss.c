@@ -32,13 +32,14 @@
 //Globals
 
 struct page{
-    pid_t pid;
-    int pageNumber;
+    int frameNumber;
+    int occupied;
 };
 
 struct frame{
     int occupied;
-    int frameNumber;
+    int pageNumber;
+    pid_t pid;
     int secondChance;
     int dirtyBit;
 };
@@ -107,7 +108,8 @@ static int randomize_helper(FILE *in);
 static int randomize(void);
 void clearResources();
 int clearProcessTable(struct PCB processTable[20], pid_t pid);
-int fillPageTable();
+int fillPageTable(pid_t, int, int);
+void fillFrameTable(pid_t, int, int, struct frame frameTable[256]);
 
 int main(int argc, char* argv[]){
 
@@ -140,13 +142,16 @@ int main(int argc, char* argv[]){
         processTable[i].startSeconds = 0;
         processTable[i].startNano = 0;
         for(int i2 = 0; i2 < 64; i2++){
-            processTable[i].pageTable[i2].pageNumber = 0;
+            processTable[i].pageTable[i2].occupied = 0;
+            processTable[i].pageTable[i2].frameNumber = 0;
         }
     }
 
     struct frame frameTable[256];
     for(int i = 0; i < 256; i++){
-        frameTable[i].frameNumber = 0;
+        frameTable[i].pageNumber = 0;
+        frameTable[i].pid = 0;
+        frameTable[i].occupied = 0;
         frameTable[i].dirtyBit = 0;
         frameTable[i].secondChance = 0;
     }
@@ -303,13 +308,48 @@ int main(int argc, char* argv[]){
                 }
             }
             else{ //By design, if you're in this block, a message has been received
-                 
+                printf("oss: P%d requesting ", buff.pid);
+                if(buff.memoryRequest > 0){
+                    printf("read");
+                }
+                else{
+                    printf("write");
+                }
+                printf(" of address %d at time %d:%d\n", abs(buff.memoryRequest), *sharedSeconds, *sharedNano);
 
+                int processNumber = -1;
+                for(int i = 0; i < 20; i++){
+                    if(processTable[i].pid == buff.pid){
+                        processNumber = i;
+                    }
+                }
+                
+                //Find free frame
+                int frameNumber = -1;
+                for(int i = 0; i < 256; i++){
+                    if(frameTable[i].occupied == 0){
+                        frameNumber = i;
+                        break;
+                    }
+                }
+                if(frameNumber >= 0){
+                    fillPageTable(buff.pid, buff.memoryRequest, frameNumber);
+                    fillFrameTable(buff.pid, buff.memoryRequest, frameNumber, frameTable);
+                }
 
+                //If frame is free
+                /*
+                 * Fill page table
+                 * Fill frame table
+                 * Send message
+                 *
+                 * Page fault
+                 * Second Chance algo
+                 */ 
+                
+                printf("oss: Address %d in frame %d, giving data to P%d at time %d:%d\n", abs(buff.memoryRequest), frameNumber,
+                       buff.pid, *sharedSeconds, *sharedNano);
 
-                printf("Parent Received Message pid: %d\n", buff.pid);
-                printf("Parent Received Message Memory: %d\n", buff.memoryRequest);
-                printf("Parent Received Message mtype: %li\n", buff.mtype);
                 buff.mtype = buff.pid;
                 buff.pid = getpid();
                 buff.memoryRequest = 0;
@@ -317,14 +357,9 @@ int main(int argc, char* argv[]){
                     perror("Msgsnd failed\n");
                     exit(1);
                 }
-                /*
-                else{
-                    printf("Parent Sent Message pid: %d\n", buff.pid);
-                    printf("Parent Sent Message Memory: %d\n", buff.memoryRequest);
-                    printf("Parent Sent Message mtype: %li\n", buff.mtype);
-                }
-                */
-            
+
+
+                            
                 //Make memory request
                 //Update page table
                 //Update frame table
@@ -356,18 +391,29 @@ int main(int argc, char* argv[]){
 
 //Section function
 
-int fillPageTable(pid_t pid, int request, struct page pageTable){
-    int index = 0;
+int fillPageTable(pid_t pid, int request, int frame){
+    int pageNumber = abs(request) / 1024;
     for(int i = 0; i < 20; i++){
         if(processTable[i].pid == pid){
-            index = i;
+            processTable[i].pageTable[pageNumber].frameNumber = frame;
+            processTable[i].pageTable[pageNumber].occupied = 1;
         }
-    }
-
-
-
-
+    } 
     return 0;
+}
+
+void fillFrameTable(pid_t pid, int request, int frame, struct frame frameTable[256]){
+    int pageNumber = abs(request) / 1024;
+    frameTable[frame].pid = pid;
+    frameTable[frame].pageNumber = pageNumber;
+    frameTable[frame].occupied = 1;
+    frameTable[frame].secondChance = 0;
+    if(request < 0){
+        frameTable[frame].dirtyBit = 1;
+    }
+    else{
+        frameTable[frame].dirtyBit = 0;
+    }
 }
 
 
@@ -443,6 +489,30 @@ void print_usage(const char * app){
     fprintf(stderr, "   intervalInMsToLaunchChildren specifies how often you should launch a child.\n");
     fprintf(stderr, "   logfile is the input for the name of the logfile for oss to write into.\n");
 }
+
+void printFrameTable(int SysClockS, int SysClockNano, struct frame frameTable[256], int nextFrame){
+    printf("Current memory layout at time %d:%d is: \n", SysClockS, SysClockNano);
+    printf("         Occupied   DirtyBit   SecondChance   NextFrame\n");
+    for(int i = 0; i < 256; i++){
+        printf("Frame %d", i);
+        printf(" ");
+        if(frameTable[i].occupied == 1){
+            printf("Yes      ");
+        }
+        else{
+            printf("No       ");
+        }
+        printf("%d          ", frameTable[i].dirtyBit);
+        printf("%d               ", frameTable[i].secondChance);
+        if(i == nextFrame){
+            printf("*\n");
+        }
+        else{
+            printf("\n");
+        }
+    }
+}
+
 
 void printProcessTable(int PID, int SysClockS, int SysClockNano, struct PCB processTable[20]){
     printf("OSS PID %d SysClockS: %d SysClockNano: %d\n", PID, SysClockS, SysClockNano);

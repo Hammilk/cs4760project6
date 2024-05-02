@@ -1,5 +1,4 @@
 #include<stdio.h>
-#include<math.h>
 #include<sys/shm.h>
 #include<sys/ipc.h>
 #include<unistd.h>
@@ -109,20 +108,23 @@ int main(int argc, char** argv){ //at some point, add bound parameter
             perror("Message Sent failure in child\n");
             exit(1);
         }
+        /*
         printf("Child Sent Message pid: %d\n", buff.pid);
         printf("Child Sent Message Memory: %d\n", buff.memoryRequest);
         printf("Child Sent Message mtype: %li\n", buff.mtype);
-
+        */
         //check if time to request
         if(msgrcv(msqid, &buff, sizeof(buff)- sizeof(long), getpid(), 0) == -1){
             perror("Message Received failure in child\n");
             exit(1);
         }
+        /*
         else{
             printf("Child Received Message pid: %d\n", buff.pid);
             printf("Child Received Message Memory: %d\n", buff.memoryRequest);
             printf("Child Received Message mtype: %li\n", buff.mtype);
         }
+        */
         int terminate = rand() % 100;
         if(terminate < termChance){
             exitFlag = 1;
