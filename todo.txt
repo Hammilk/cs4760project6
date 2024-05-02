@@ -7,4 +7,3 @@ Change user_proc.c termination criteria to 1000 memory checks
 Implement increments
 
 Outstanding issues:
-There's an infinite loop somewhere
