@@ -396,7 +396,7 @@ int main(int argc, char* argv[]){
                     }
                 }
                 else{
-                    enQueue(blockQueue, processNumber);
+                    enQueue(blockQueue, processNumber, buff.memoryRequest);
                     processTable[processNumber].blockSeconds = *sharedSeconds;
                     processTable[processNumber].blockNano = (*sharedNano) + 14 * pow(10, 6);
                     if(processTable[processNumber].blockNano > pow(10, 9)){
