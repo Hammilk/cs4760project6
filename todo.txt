@@ -1,5 +1,0 @@
-Create statistics
-Create fprintfs
-
-
-Outstanding issues:
