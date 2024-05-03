@@ -256,14 +256,10 @@ int main(int argc, char* argv[]){
     int childLaunchedCount = 0;
     pid_t terminatedChild = 0;
     int status = 0; //Where status of terminated pid will be stored
-    int blockedCount = 0;
-    int altFlag = 0;
-    int checkSecond = 0; 
-    int checkProgressSecond = 0;
-    int grantedCount = 0;
     struct frame *nextFrame;
     nextFrame = &frameTable[0];
     int frameInterval = 0;
+    int secondChanceIndex = 0;
 
     struct Queue *blockQueue = createQueue();
 
@@ -276,8 +272,8 @@ int main(int argc, char* argv[]){
             perror("Wait for PID failed\n");
         }
         else if(terminatedChild > 0){
-            fprintf(fptr, "OSS: P%d has terminated at time %d:%d", terminatedChild, *sharedSeconds, *sharedNano);
-            printf("OSS: P%d has terminated at time %d:%d", terminatedChild, *sharedSeconds, *sharedNano);
+            fprintf(fptr, "OSS: P%d has terminated at time %d:%d\n", terminatedChild, *sharedSeconds, *sharedNano);
+            printf("OSS: P%d has terminated at time %d:%d\n", terminatedChild, *sharedSeconds, *sharedNano);
             simulCount--;
             childrenFinishedCount++;
             clearProcessTable(processTable, terminatedChild);
@@ -308,7 +304,7 @@ int main(int argc, char* argv[]){
                 perror("Add process table failed");
                 exit(1);
             }
-            //printf("OSS: Process %d has launched at %d seconds and %d nano\n", child, *sharedSeconds, *sharedNano);
+            printf("OSS: Process %d has launched at %d seconds and %d nano\n", child, *sharedSeconds, *sharedNano);
             fprintf(fptr, "Process %d has launched at %d seconds and %d nano\n", child, *sharedSeconds, *sharedNano);
             simulCount++;
             childLaunchedCount++;
@@ -322,7 +318,6 @@ int main(int argc, char* argv[]){
             ((*sharedSeconds) == processTable[blockQueue->front->key].blockSeconds &&
             (*sharedNano) > processTable[blockQueue->front->key].blockNano))
         ){
-            int nextFrame = -1;
             int queuedRequest = blockQueue->front->request;
             int queuedProcessIndex = blockQueue->front->key;
             pid_t queuedProcess = processTable[queuedProcessIndex].pid;
@@ -331,31 +326,40 @@ int main(int argc, char* argv[]){
                 deQueue(blockQueue);
             }
             else{
-                //Check for open frames
-                for(int i = 0; i < 256; i++){
-                    if(frameTable[i].occupied == 0){
-                        nextFrame = i;
-                        printf("oss: Address %d in page %d inserted in frame %d, giving queued data to P%d at time %d:%d\n", 
-                           queuedRequest, abs(queuedRequest)/1024, nextFrame, queuedProcess, *sharedSeconds, *sharedNano);
-                        break;
+                int next = -1;
+                while(next < 0){
+                    if((*(nextFrame + secondChanceIndex)).secondChance == 1){
+                        nextFrame->secondChance = 0;
+                        secondChanceIndex++;
+                        if(secondChanceIndex > 255){
+                            secondChanceIndex = 0;
+                        }
                     }
-                }
-                //If no open frames, create a victim frame through clock
-                if(nextFrame < 0){
-                    nextFrame = secondChance(frameTable);
-                    printf("oss: Clearing frame %d and swapping in P%d page %d\n", nextFrame, queuedProcess, abs(queuedRequest/1024));
-                }
+                    else{
+                        if(nextFrame->occupied == 1){
+                            printf("oss: Clearing frame %d and swapping in P%d page %d\n", secondChanceIndex, queuedProcess, abs(queuedRequest/1024));
+                        }
+                        nextFrame->secondChance = 1;
+                        secondChanceIndex++;
+                        if(secondChanceIndex > 255){
+                            secondChanceIndex = 0;
+                        }
+                        fillPageTable(queuedProcess, queuedRequest, secondChanceIndex-1);
+                        fillFrameTable(queuedProcess, queuedRequest, secondChanceIndex-1, frameTable);
+                        next = secondChanceIndex;
+                    }
+                } 
 
-
-                //Fill tables
-                fillPageTable(queuedProcess, queuedRequest, nextFrame);
-                fillFrameTable(queuedProcess, queuedRequest, nextFrame, frameTable);
-                if(queuedRequest < 0){
-                    printf("OSS: Dirty bit of frame %d set, adding additional time to clock\n", nextFrame);
-                    
-                }
                 //Send message to release child process
-                
+                if(queuedRequest > 0){
+                    printf("oss: Address %d in page %d in frame %d, giving data to P%d at time %d:%d\n", 
+                        queuedRequest, abs(queuedRequest)/1024, secondChanceIndex-1, queuedProcess, *sharedSeconds, *sharedNano);
+                }
+                else{
+                    printf("oss: Address %d in page %d in frame %d, writing data to frame at time %d:%d\n", 
+                        queuedRequest, abs(queuedRequest)/1024, secondChanceIndex-1, *sharedSeconds, *sharedNano);
+                    printf("OSS: Dirty bit of frame %d set, adding additional time to clock\n", secondChanceIndex);
+                }
                 buff.pid = getpid();
                 buff.mtype = queuedProcess;
                 buff.memoryRequest = 0;
@@ -363,6 +367,7 @@ int main(int argc, char* argv[]){
                     perror("queued message send failed\n");
                     exit(1);
                 }
+                printf("oss: Indicated to P%d that write has happened to address %d\n", queuedProcess, abs(queuedRequest));
                 //Clear blocked info
                 deQueue(blockQueue);
                 processTable[queuedProcessIndex].blockSeconds = 0;
@@ -375,7 +380,7 @@ int main(int argc, char* argv[]){
         if(simulCount > 0){
             if(msgrcv(msqid, &buff, sizeof(buff) - sizeof(long), getpid(), IPC_NOWAIT)==-1){
                 if(errno == ENOMSG){
-                    incrementClock(sharedSeconds, sharedNano, 100);
+                    incrementClock(sharedSeconds, sharedNano, 1000);
                 }
                 else{
                     printf("MSQID: %li\n", buff.mtype);
@@ -386,7 +391,7 @@ int main(int argc, char* argv[]){
             }
             else{ //By design, if you're in this block, a message has been received
                 int address = abs(buff.memoryRequest);                
-                /*
+                
                 printf("oss: P%d requesting ", buff.pid);
                 if(buff.memoryRequest > 0){
                     printf("read");
@@ -395,7 +400,7 @@ int main(int argc, char* argv[]){
                     printf("write");
                 }
                 printf(" of address %d at time %d:%d\n", abs(buff.memoryRequest), *sharedSeconds, *sharedNano);
-                */
+                
 
                 //Creates a process number index for future use 
                 int processNumber = -1;
@@ -407,14 +412,15 @@ int main(int argc, char* argv[]){
 
                 //Checks for no page fault
                 if(processTable[processNumber].pageTable[address/1024].occupied == 1){
-                    int frameReference = processTable[processNumber].pageTable[address/1024].frameNumber;
+                    int frameReference = abs(processTable[processNumber].pageTable[address/1024].frameNumber);
                     frameTable[frameReference].secondChance = 1;
                     //I don't actually know if the following is needed
                     if(buff.memoryRequest < 0){
                         frameTable[frameReference].dirtyBit = 1;
                     }
-                    //printf("oss: Address %d in frame %d, giving data to P%d at time %d:%d\n", 
-                     //      abs(buff.memoryRequest), frameReference, buff.pid, *sharedSeconds, *sharedNano);
+                    incrementClock(sharedSeconds, sharedNano, 100);
+                    printf("oss: Address %d in frame %d, giving data to P%d at time %d:%d\n", 
+                        abs(buff.memoryRequest), frameReference, buff.pid, *sharedSeconds, *sharedNano);
 
                     buff.mtype = buff.pid;
                     buff.pid = getpid();
@@ -425,6 +431,7 @@ int main(int argc, char* argv[]){
                     }
                 }
                 else{
+                    printf("oss: Address %d is not in a frame, pagefault\n", buff.memoryRequest);
                     enQueue(blockQueue, processNumber, buff.memoryRequest);
                     processTable[processNumber].blockSeconds = *sharedSeconds;
                     processTable[processNumber].blockNano = (*sharedNano) + 14 * pow(10, 6);
@@ -433,20 +440,12 @@ int main(int argc, char* argv[]){
                         processTable[processNumber].blockSeconds++;
                     }
                 }
-                
-                                
-                //Make memory request
-                //Update page table
-                //Update frame table
-                //If page fault, run clock algo
-                //Send message back to child to unblock
-
             }
         }
         //printf("TestLoop %d\n", childrenFinishedCount);
         if((*sharedSeconds) > frameInterval){
             frameInterval++;
-            //printFrameTable(*sharedSeconds, *sharedNano, frameTable, 0);
+            printFrameTable(*sharedSeconds, *sharedNano, frameTable, secondChanceIndex);
         }
         incrementClock(sharedSeconds, sharedNano, 5000); 
     }
@@ -528,8 +527,6 @@ void fillFrameTable(pid_t pid, int request, int frame, struct frame frameTable[2
         frameTable[frame].dirtyBit = 0;
     }
 }
-
-
 
 int terminateCheck(){
     int status = 0;
