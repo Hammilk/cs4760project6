@@ -95,6 +95,7 @@ struct Queue{
 };
 
 //Function prototypes
+void fprintFrameTable(int SysClockS, int SysClockNano, struct frame frameTable[256], int nextFrame, FILE *fptr);
 void printFrameTable(int SysClockS, int SysClockNano, struct frame frameTable[256], int nextFrame);
 void clearFrame(struct frame frameTable[256], pid_t pid);
 int terminateCheck();
@@ -350,6 +351,9 @@ int main(int argc, char* argv[]){
                     }
                     else{
                         processTable[queuedProcessIndex].memoryAccessTime += 14 * pow(10, 6);
+                        if(queuedRequest < 0){
+                            processTable[queuedProcessIndex].memoryAccessTime += pow(10, 6); //Extra memory access time for write
+                        }
                         if(nextFrame->occupied == 1){
                             printf("oss: Clearing frame %d and swapping in P%d page %d\n", secondChanceIndex, queuedProcess, abs(queuedRequest/1024));
                         }
@@ -374,7 +378,9 @@ int main(int argc, char* argv[]){
                 else{
                     printf("oss: Address %d in page %d in frame %d, writing data to frame at time %d:%d\n", 
                         queuedRequest, abs(queuedRequest)/1024, secondChanceIndex-1, *sharedSeconds, *sharedNano);
-                    printf("OSS: Dirty bit of frame %d set, adding additional time to clock\n", secondChanceIndex);
+                    printf("oss: Dirty bit of frame %d set, adding additional time to clock\n", secondChanceIndex);
+                    incrementClock(sharedSeconds, sharedNano, pow(10,6));
+
                 }
                 buff.pid = getpid();
                 buff.mtype = queuedProcess;
@@ -383,12 +389,13 @@ int main(int argc, char* argv[]){
                     perror("queued message send failed\n");
                     exit(1);
                 }
-                printf("oss: Indicated to P%d that write has happened to address %d\n", queuedProcess, abs(queuedRequest));
+                if(queuedRequest < 0){
+                    printf("oss: Indicated to P%d that write has happened to address %d\n", queuedProcess, abs(queuedRequest));
+                }
                 //Clear blocked info
                 deQueue(blockQueue);
                 processTable[queuedProcessIndex].blockSeconds = 0;
                 processTable[queuedProcessIndex].blockNano = 0;
-
             }
         }
 
@@ -462,8 +469,10 @@ int main(int argc, char* argv[]){
         }
         if((*sharedSeconds) > frameInterval){
             frameInterval++;
+            printProcessTable(getpid(), *sharedSeconds, *sharedNano, processTable);
             fprintProcessTable(getpid(), *sharedSeconds, *sharedNano, processTable, fptr);
             printFrameTable(*sharedSeconds, *sharedNano, frameTable, secondChanceIndex);
+            fprintFrameTable(*sharedSeconds, *sharedNano, frameTable, secondChanceIndex, fptr);
         }
         incrementClock(sharedSeconds, sharedNano, 5000); 
     }
@@ -640,6 +649,30 @@ void printFrameTable(int SysClockS, int SysClockNano, struct frame frameTable[25
         }
         else{
             printf("\n");
+        }
+    }
+}
+
+
+void fprintFrameTable(int SysClockS, int SysClockNano, struct frame frameTable[256], int nextFrame, FILE *fptr){
+    lfprintf(fptr, "Current memory layout at time %d:%d is: \n", SysClockS, SysClockNano);
+    lfprintf(fptr, "         Occupied   DirtyBit   SecondChance   NextFrame\n");
+    for(int i = 0; i < 256; i++){
+        lfprintf(fptr,"Frame %d", i);
+        lfprintf(fptr, " ");
+        if(frameTable[i].occupied == 1){
+            lfprintf(fptr, "Yes      ");
+        }
+        else{
+            lfprintf(fptr, "No       ");
+        }
+        lfprintf(fptr, "%d          ", frameTable[i].dirtyBit);
+        lfprintf(fptr, "%d               ", frameTable[i].secondChance);
+        if(i == nextFrame){
+            lfprintf(fptr, "*\n");
+        }
+        else{
+            lfprintf(fptr, "\n");
         }
     }
 }
