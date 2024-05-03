@@ -328,12 +328,13 @@ int main(int argc, char* argv[]){
             else{
                 int next = -1;
                 while(next < 0){
-                    if((*(nextFrame + secondChanceIndex)).secondChance == 1){
+                    if(nextFrame->secondChance == 1){
                         nextFrame->secondChance = 0;
                         secondChanceIndex++;
                         if(secondChanceIndex > 255){
                             secondChanceIndex = 0;
                         }
+                        nextFrame = &frameTable[secondChanceIndex];
                     }
                     else{
                         if(nextFrame->occupied == 1){
@@ -347,6 +348,7 @@ int main(int argc, char* argv[]){
                         fillPageTable(queuedProcess, queuedRequest, secondChanceIndex-1);
                         fillFrameTable(queuedProcess, queuedRequest, secondChanceIndex-1, frameTable);
                         next = secondChanceIndex;
+                        nextFrame = &frameTable[secondChanceIndex];
                     }
                 } 
 
