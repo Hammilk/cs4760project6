@@ -43,6 +43,7 @@ struct frame{
     int secondChance;
     int dirtyBit;
     int nextFrame;
+    int time;
 };
  
 struct PCB{
@@ -52,6 +53,7 @@ struct PCB{
     int startNano; //time when it was forked
     int blockSeconds; //time until unblock
     int blockNano; //time until unblock
+    int memoryAccessTime;
     struct page pageTable[64];
 };
 
@@ -97,7 +99,7 @@ void printFrameTable(int SysClockS, int SysClockNano, struct frame frameTable[25
 void clearFrame(struct frame frameTable[256], pid_t pid);
 int terminateCheck();
 int req_lt_avail(const int *req, const int *avail, const int pnum, const int num_res);
-int addProcessTable(struct PCB processTable[20], pid_t pid);
+int addProcessTable(struct PCB processTable[20], pid_t pid, FILE *fptr);
 struct QNode* newNode(int k, int r);
 struct Queue* createQueue();
 void enQueue(struct Queue* q, int k, int r);
@@ -114,10 +116,8 @@ static int randomize(void);
 void clearResources();
 int clearProcessTable(struct PCB processTable[20], pid_t pid);
 int fillPageTable(pid_t, int, int);
-void fillFrameTable(pid_t, int, int, struct frame frameTable[256]);
+void fillFrameTable(pid_t, int, int, struct frame frameTable[256], int SysClockS, int SysClockNano);
 int secondChance(struct frame FrameTable[256]);
-
-
 
 int main(int argc, char* argv[]){
 
@@ -151,6 +151,7 @@ int main(int argc, char* argv[]){
         processTable[i].startNano = 0;
         processTable[i].blockSeconds = 0;
         processTable[i].blockNano = 0;
+        processTable[i].memoryAccessTime = 0;
         for(int i2 = 0; i2 < 64; i2++){
             processTable[i].pageTable[i2].occupied = 0;
             processTable[i].pageTable[i2].frameNumber = 0;
@@ -264,16 +265,28 @@ int main(int argc, char* argv[]){
     struct Queue *blockQueue = createQueue();
 
     //Stats
+    int memoryAccessCount = 0;
+    int pageFaultCount = 0;
     //Section Work
     while(childrenFinishedCount < options.proc){
-
+        
         int terminatedChild = 0;
         if(simulCount > 0 && (terminatedChild = terminateCheck()) < 0){
             perror("Wait for PID failed\n");
         }
         else if(terminatedChild > 0){
-            fprintf(fptr, "OSS: P%d has terminated at time %d:%d\n", terminatedChild, *sharedSeconds, *sharedNano);
-            printf("OSS: P%d has terminated at time %d:%d\n", terminatedChild, *sharedSeconds, *sharedNano);
+            //fprintProcessTable(getpid(), *sharedSeconds, *sharedNano, processTable, fptr);
+            int tempIndex = 0;
+            for(int i = 0; i < 20; i++){
+                if(processTable[i].pid == terminatedChild){
+                    tempIndex = i;
+                }
+            }
+
+            fprintf(fptr, "OSS: P%d has terminated with memory access time of %d at time %d:%d\n", 
+                    terminatedChild, processTable[tempIndex].memoryAccessTime,*sharedSeconds, *sharedNano);
+            printf("OSS: P%d has terminated with memory access time of %d at time %d:%d\n", 
+                   terminatedChild, processTable[tempIndex].memoryAccessTime,*sharedSeconds, *sharedNano);
             simulCount--;
             childrenFinishedCount++;
             clearProcessTable(processTable, terminatedChild);
@@ -300,7 +313,7 @@ int main(int argc, char* argv[]){
             exit(1);
         }
         if(child > 0){
-            if(addProcessTable(processTable, child) == -1){
+            if(addProcessTable(processTable, child, fptr) == -1){
                 perror("Add process table failed");
                 exit(1);
             }
@@ -312,7 +325,6 @@ int main(int argc, char* argv[]){
         }
 
         //Check Queues
-        //Changed if to while
         while(blockQueue->front != NULL &&
             (((*sharedSeconds) > processTable[blockQueue->front->key].blockSeconds) ||
             ((*sharedSeconds) == processTable[blockQueue->front->key].blockSeconds &&
@@ -337,6 +349,7 @@ int main(int argc, char* argv[]){
                         nextFrame = &frameTable[secondChanceIndex];
                     }
                     else{
+                        processTable[queuedProcessIndex].memoryAccessTime += 14 * pow(10, 6);
                         if(nextFrame->occupied == 1){
                             printf("oss: Clearing frame %d and swapping in P%d page %d\n", secondChanceIndex, queuedProcess, abs(queuedRequest/1024));
                         }
@@ -346,7 +359,8 @@ int main(int argc, char* argv[]){
                             secondChanceIndex = 0;
                         }
                         fillPageTable(queuedProcess, queuedRequest, secondChanceIndex-1);
-                        fillFrameTable(queuedProcess, queuedRequest, secondChanceIndex-1, frameTable);
+                        fillFrameTable(queuedProcess, queuedRequest, secondChanceIndex-1, frameTable, *sharedNano, *sharedSeconds);
+                        memoryAccessCount++;
                         next = secondChanceIndex;
                         nextFrame = &frameTable[secondChanceIndex];
                     }
@@ -416,11 +430,12 @@ int main(int argc, char* argv[]){
                 if(processTable[processNumber].pageTable[address/1024].occupied == 1){
                     int frameReference = abs(processTable[processNumber].pageTable[address/1024].frameNumber);
                     frameTable[frameReference].secondChance = 1;
-                    //I don't actually know if the following is needed
                     if(buff.memoryRequest < 0){
                         frameTable[frameReference].dirtyBit = 1;
                     }
                     incrementClock(sharedSeconds, sharedNano, 100);
+                    memoryAccessCount++;
+                    processTable[processNumber].memoryAccessTime += 100;
                     printf("oss: Address %d in frame %d, giving data to P%d at time %d:%d\n", 
                         abs(buff.memoryRequest), frameReference, buff.pid, *sharedSeconds, *sharedNano);
 
@@ -433,7 +448,8 @@ int main(int argc, char* argv[]){
                     }
                 }
                 else{
-                    printf("oss: Address %d is not in a frame, pagefault\n", buff.memoryRequest);
+                    printf("oss: Address %d is not in a frame, pagefault\n", abs(buff.memoryRequest));
+                    pageFaultCount++;
                     enQueue(blockQueue, processNumber, buff.memoryRequest);
                     processTable[processNumber].blockSeconds = *sharedSeconds;
                     processTable[processNumber].blockNano = (*sharedNano) + 14 * pow(10, 6);
@@ -444,15 +460,19 @@ int main(int argc, char* argv[]){
                 }
             }
         }
-        //printf("TestLoop %d\n", childrenFinishedCount);
         if((*sharedSeconds) > frameInterval){
             frameInterval++;
+            fprintProcessTable(getpid(), *sharedSeconds, *sharedNano, processTable, fptr);
             printFrameTable(*sharedSeconds, *sharedNano, frameTable, secondChanceIndex);
         }
         incrementClock(sharedSeconds, sharedNano, 5000); 
     }
 
-    printf("Out of loop\n");
+    printf("Stats Section---------\n");
+    float memAccessPerSecond = (float) memoryAccessCount / *sharedSeconds;
+    float pageFaultPerMem = (float) pageFaultCount / (memoryAccessCount);
+    printf("Number of Memory Accesses per Second: %f\n", memAccessPerSecond);
+    printf("Number of Page Faults per Memory Access: %f\n", pageFaultPerMem);
     //Remove message queues 
     if(msgctl(msqid, IPC_RMID, NULL) == -1){
         perror("msgctl to get rid of queue in parent failed");
@@ -516,7 +536,7 @@ int fillPageTable(pid_t pid, int request, int frame){
     return 0;
 }
 
-void fillFrameTable(pid_t pid, int request, int frame, struct frame frameTable[256]){
+void fillFrameTable(pid_t pid, int request, int frame, struct frame frameTable[256], int SysClockS, int SysClockNano){
     int pageNumber = abs(request) / 1024;
     frameTable[frame].pid = pid;
     frameTable[frame].pageNumber = pageNumber;
@@ -534,7 +554,6 @@ int terminateCheck(){
     int status = 0;
     pid_t terminatedChild = waitpid(0, &status, WNOHANG);
     if(terminatedChild > 0){
-        clearProcessTable(processTable, terminatedChild);
         return terminatedChild;
     }
     else if(terminatedChild == 0){
@@ -629,11 +648,11 @@ void printFrameTable(int SysClockS, int SysClockNano, struct frame frameTable[25
 void printProcessTable(int PID, int SysClockS, int SysClockNano, struct PCB processTable[20]){
     printf("OSS PID %d SysClockS: %d SysClockNano: %d\n", PID, SysClockS, SysClockNano);
     printf("Process Table:\n");
-    printf("Entry     Occupied  PID       StartS    Startn     Blocked\n"); 
+    printf("Entry     Occupied  PID       StartS    Startn     MemoryAccessTime\n"); 
     for(int i = 0; i<20; i++){
         if((processTable[i].occupied) == 1){
-            printf("%d         %d         %d         %d         %d\n", i, processTable[i].occupied,
-                   processTable[i].pid, processTable[i].startSeconds, processTable[i].startNano);
+            printf("%d         %d         %d         %d         %d          %d\n", i, processTable[i].occupied,
+                   processTable[i].pid, processTable[i].startSeconds, processTable[i].startNano, processTable[i].memoryAccessTime);
         }
     } 
 }
@@ -641,11 +660,11 @@ void printProcessTable(int PID, int SysClockS, int SysClockNano, struct PCB proc
 void fprintProcessTable(int PID, int SysClockS, int SysClockNano, struct PCB processTable[20], FILE *fptr){
     lfprintf(fptr, "OSS PID %d SysClockS: %d SysClockNano: %d\n", PID, SysClockS, SysClockNano);
     lfprintf(fptr, "Process Table:\n");
-    lfprintf(fptr, "Entry     Occupied  PID       StartS    Startn      Blocked\n"); 
+    lfprintf(fptr, "Entry     Occupied  PID       StartS    Startn    MemoryAccessTime\n"); 
     for(int i = 0; i<20; i++){
         if((processTable[i].occupied) == 1){
-            lfprintf(fptr, "%d         %d         %d         %d\n", i, processTable[i].occupied, 
-                     processTable[i].pid, processTable[i].startSeconds, processTable[i].startNano);
+            lfprintf(fptr, "%d         %d         %d         %d          %d\n", i, processTable[i].occupied, 
+                     processTable[i].pid, processTable[i].startSeconds, processTable[i].startNano, processTable[i].memoryAccessTime);
         }
     } 
 }
@@ -701,6 +720,7 @@ int clearProcessTable(struct PCB processTable[20], pid_t pid){
             processTable[i].startNano = 0;
             processTable[i].blockSeconds = 0;
             processTable[i].blockNano = 0;
+            processTable[i].memoryAccessTime = 0;
             for(int i2 = 0; i2 < 64; i2++){
                 processTable[i].pageTable[i2].occupied = 0;
                 processTable[i].pageTable[i2].frameNumber = 0;
@@ -711,13 +731,15 @@ int clearProcessTable(struct PCB processTable[20], pid_t pid){
     return -1;
 }
 
-int addProcessTable(struct PCB processTable[20], pid_t pid){
+int addProcessTable(struct PCB processTable[20], pid_t pid, FILE *fptr){
     for(int i = 0; i < 20; i++){
-        if(!processTable[i].occupied){
+        if(processTable[i].occupied == 0){
             processTable[i].occupied = 1;
             processTable[i].pid = pid;
             processTable[i].startNano = *sharedNano;
             processTable[i].startSeconds = *sharedSeconds;
+            processTable[i].memoryAccessTime = 0;
+            //DELETE
             return 0;
         }
     }

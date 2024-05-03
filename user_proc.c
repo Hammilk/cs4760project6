@@ -91,7 +91,7 @@ int main(int argc, char** argv){ //at some point, add bound parameter
     int requestCount = 0;
     
     //Work section
-    while(!exitFlag){
+    while(exitFlag == 0){
         
         int pageNumber = rand() % 64;
         int offset = rand() % 1024;
