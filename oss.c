@@ -615,7 +615,7 @@ static int setupinterrupt(void){
 
 static int setupitimer(void){
     struct itimerval value;
-    value.it_interval.tv_sec = 60;
+    value.it_interval.tv_sec = 5;
     value.it_interval.tv_usec = 0;
     value.it_value = value.it_interval;
     return (setitimer(ITIMER_PROF, &value, NULL));

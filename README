@@ -1,0 +1,24 @@
+CS 4760
+AUTHOR: DAVID PHAM
+PROJECT: PROJECT 5
+
+The purpose of this project is to simulate memory calls with the implementation of paging.
+
+I set the program to end after 5 real life seconds but tbh it's more interesting if you let it run.
+
+
+The following are the user input parameters for this project:
+-h "Help" Brings up user parameters for project
+-n "proc" Total amount of children to be launched
+-s "simul" Simultaneous amount of children that can be launched
+-t "timeLimitforChildren" The period of time the children will exist for
+-i "intervalInMsToLaunchChildren" The upper bound of a tie interval of which the parent will launch the children
+-f "logfile" This input is the name of the logfile that you would like to write to. Add suffix ".txt" if you want file to be .txt file.
+
+To compile the project. Enter "make" into the command line and run "./oss".
+
+Outstanding Issues:
+None known
+
+To clean files, enter "make clean" into the command line.
+
