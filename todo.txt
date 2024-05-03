@@ -3,5 +3,9 @@ Create logs
 Create statistics
 Create fprintfs
 Implement increments
+On initial load does need to be blocked
+1 pointer pointing to each frame
+use clock for EVERYTHING
+
 
 Outstanding issues:
